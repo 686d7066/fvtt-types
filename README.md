@@ -6,21 +6,29 @@ This package is generated from a local Foundry VTT installation. It is not publi
 
 ## Install From GitHub
 
+This installs the current default branch:
+
 ```sh
-npm install --save-dev github:686d7066/FoundryVTT_Types
+npm install --save-dev github:686d7066/fvtt-types
 ```
 
-If your repository name differs, replace the GitHub spec with the actual owner and repository.
+To install a specific generated version, pin the matching Git tag:
+
+```sh
+npm install --save-dev github:686d7066/fvtt-types#14.370.1
+```
+
+Available generated versions are listed on the repository's GitHub tags page:
+`https://github.com/686d7066/fvtt-types/tags`.
 
 Then add the package to your module project's `tsconfig.json`:
 
 ```json
 {
   "compilerOptions": {
-    "types": ["foundry-vtt-types"],
+    "types": ["fvtt-types"],
     "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "skipLibCheck": true
+    "moduleResolution": "NodeNext"
   }
 }
 ```
@@ -58,20 +66,27 @@ repository. Releases are therefore generated locally and committed as package ou
 1. Install the target Foundry VTT version locally.
 2. Update `package.json` to the matching Foundry version.
 3. Run `npm run build`.
-4. Commit the updated `dist` folder and version change.
+4. Commit the updated `dist` folder, dependency files, and version change.
 5. Merge the change to `main`.
 
 The GitHub workflow reads `package.json.version` on `main` and creates a matching Git tag if it
 does not already exist. For example, version `14.370.1` is tagged as `14.370.1`.
 
-Users can install a specific generated version by pinning that tag:
-
-```sh
-npm install --save-dev github:686d7066/FoundryVTT_Types#14.370.1
-```
-
 ## Notes
 
 - The package is intended for type-checking Foundry modules. It does not provide any runtime code.
 - The generated declarations reflect the local Foundry build used at generation time.
-- External runtime libraries used by Foundry, such as `pixi.js`, are left as type imports where Foundry exposes them. Use `skipLibCheck` unless your module project also installs those library packages.
+- External runtime libraries used by Foundry, such as `pixi.js`, are installed as dependencies of this package.
+
+## License And Attribution
+
+Foundry Virtual Tabletop is a copyright of Foundry Gaming LLC.
+
+This repository contains types meant to help with local Foundry Virtual Tabletop module development.
+Generated declaration files are created from a licensed local Foundry VTT installation.
+
+No affiliation with, endorsement from, or ownership by Foundry Gaming LLC is implied.
+
+Feel free to use the provided types within the limits of what the Foundry Virtual Tabletop license allows.
+
+Code not affiliated directly with Foundry Virtual Tabletop in this repo is provided under the MIT license.

@@ -17,6 +17,13 @@ type PackageJson = {
   version?: string;
 };
 
+type FoundryTsconfig = {
+  include?: string[];
+  compilerOptions?: Record<string, unknown> & {
+    paths?: Record<string, string[]>;
+  };
+};
+
 type GeneratorConfig = {
   foundryApp?: string;
 };
@@ -62,6 +69,7 @@ if (!existsSync(foundryPackagePath) || !existsSync(foundryTsconfigPath)) {
 // The generated package tracks exactly one Foundry version, so stop early if the
 // configured app does not match this repository's package version.
 const foundryPackage = JSON.parse(readFileSync(foundryPackagePath, "utf8")) as FoundryPackage;
+const foundryTsconfig = JSON.parse(readFileSync(foundryTsconfigPath, "utf8")) as FoundryTsconfig;
 const packageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as PackageJson;
 
 if (foundryPackage.version !== packageJson.version) {
@@ -86,50 +94,26 @@ mkdirSync(distDir, {recursive: true});
 // patterns are more reliable across platforms in that form.
 const foundryPath = foundryApp.replaceAll("\\", "/");
 const emittedPath = emittedDir.replaceAll("\\", "/");
+const foundryIncludes = foundryTsconfig.include ?? [];
+const sourceRoots = findIncludedSourceRoots(foundryIncludes, foundryApp);
+const globalDeclarationPaths = findIncludedGlobalDeclarations(foundryIncludes, foundryApp);
+const aliasTargets = findAliasTargets(foundryTsconfig.compilerOptions?.paths ?? {});
 
 // Emit declarations from Foundry's JavaScript and global declaration inputs.
 // allowJs lets tsc read Foundry's .mjs files, emitDeclarationOnly prevents
-// JavaScript output, rootDir preserves the client/common/setup folder layout,
-// and the alias paths mirror Foundry's own internal imports.
+// JavaScript output, rootDir preserves Foundry's folder layout, and includes
+// plus alias paths are inherited from Foundry's own tsconfig.
 const tempTsconfig = {
-  include: [
-    `${foundryPath}/client/**/*.mjs`,
-    `${foundryPath}/client/global.d.mts`,
-    `${foundryPath}/common/global.d.mts`,
-    `${foundryPath}/setup/**/*.mjs`
-  ],
+  include: foundryIncludes.map((include) => toAbsoluteTsconfigPattern(include, foundryPath)),
   compilerOptions: {
-    strict: true,
-    allowJs: true,
-    checkJs: false,
+    ...foundryTsconfig.compilerOptions,
     declaration: true,
     emitDeclarationOnly: true,
     declarationMap: false,
-    lib: [
-      "ES2023",
-      "ESNext.Array",
-      "ESNext.AsyncIterable",
-      "ESNext.Collection",
-      "ESNext.Iterator",
-      "ESNext.Object",
-      "ESNext.Promise",
-      "DOM",
-      "DOM.Iterable",
-      "DOM.AsyncIterable"
-    ],
-    module: "NodeNext",
-    moduleResolution: "nodenext",
-    target: "ESNext",
     outDir: emittedPath,
     rootDir: foundryPath,
-    skipLibCheck: true,
     types: [],
-    baseUrl: foundryPath,
-    paths: {
-      "@common/*": ["common/*"],
-      "@client/*": ["client/*"],
-      "@setup/*": ["setup/*"]
-    }
+    baseUrl: foundryPath
   }
 };
 
@@ -160,30 +144,27 @@ if (emit.status !== 0) {
   throw new Error(`TypeScript declaration emit failed with exit code ${String(emit.status)}.`);
 }
 
-// Copy only the public Foundry source roots that were actually emitted.
-for (const folder of ["client", "common", "setup"]) {
+// Copy only the Foundry source roots that were actually emitted.
+for (const folder of sourceRoots) {
   const from = join(emittedDir, folder);
   if (existsSync(from)) cpSync(from, join(distDir, folder), {recursive: true});
 }
 
 // Preserve Foundry's ambient global declarations verbatim alongside the emitted
 // module declarations because they are referenced by the package entry point.
-cpSync(join(foundryApp, "client", "global.d.mts"), join(distDir, "client", "global.d.mts"));
-cpSync(join(foundryApp, "common", "global.d.mts"), join(distDir, "common", "global.d.mts"));
+for (const source of globalDeclarationPaths) {
+  const target = join(distDir, relative(foundryApp, source));
+  mkdirSync(dirname(target), {recursive: true});
+  cpSync(source, target);
+}
 
 // Normalize emitted declarations so consumers can import them without Foundry's
 // source aliases or TypeScript's private-name declaration artifacts leaking out.
-postProcessDeclarations(distDir);
+postProcessDeclarations(distDir, aliasTargets);
 
 // Publish one root entry point that exposes Foundry's global declarations and
-// module namespaces for client, common, and setup code.
-const index = `/// <reference path="./common/global.d.mts" />
-/// <reference path="./client/global.d.mts" />
-
-export * as foundry from "./client/_module.mjs";
-export * as foundryCommon from "./common/_module.mjs";
-export * as foundrySetup from "./setup/_module.mjs";
-`;
+// the module roots that exist in the generated output.
+const index = buildIndex(sourceRoots, globalDeclarationPaths, foundryApp, distDir);
 
 writeFileSync(join(distDir, "index.d.ts"), index, "utf8");
 
@@ -200,7 +181,7 @@ writeFileSync(join(distDir, "foundry-version.json"), `${JSON.stringify(metadata,
 
 console.log(`Generated Foundry VTT ${String(foundryPackage.version)} declarations in ${distDir}`);
 
-function postProcessDeclarations(root: string): void {
+function postProcessDeclarations(root: string, aliasTargets: Map<string, string>): void {
   // Walk the generated dist tree recursively because declarations are emitted in
   // the same nested folder structure as Foundry's source files.
   for (const entry of readdirSync(root)) {
@@ -208,7 +189,7 @@ function postProcessDeclarations(root: string): void {
     const stat = statSync(path);
 
     if (stat.isDirectory()) {
-      postProcessDeclarations(path);
+      postProcessDeclarations(path, aliasTargets);
       continue;
     }
 
@@ -227,16 +208,93 @@ function postProcessDeclarations(root: string): void {
       // Some generated declarations contain an invalid "extends class" shape.
       // Replace it with a broad abstract constructor constraint.
       .replaceAll(/\bextends class\b/g, "extends abstract new (...args: any) => any")
-      // Convert Foundry's internal @common/@client/@setup aliases to relative
-      // paths that work for consumers of the published dist folder.
-      .replaceAll(/(["'])@(common|client|setup)\/([^"']+)\1/g, (_match, quote: string, alias: string, target: string) => {
-        let rewritten = relative(dirname(path), join(distDir, alias, target)).replaceAll("\\", "/");
+      // Convert Foundry's internal path aliases to relative paths that work for
+      // consumers of the published dist folder.
+      .replaceAll(/(["'])@([^/"']+)\/([^"']+)\1/g, (match, quote: string, alias: string, target: string) => {
+        const targetRoot = aliasTargets.get(alias);
+        if (!targetRoot) return match;
+
+        let rewritten = relative(dirname(path), join(distDir, targetRoot, target)).replaceAll("\\", "/");
         if (!rewritten.startsWith(".")) rewritten = `./${rewritten}`;
         return `${quote}${rewritten}${quote}`;
       });
 
     if (after !== before) writeFileSync(path, after, "utf8");
   }
+}
+
+function toAbsoluteTsconfigPattern(pattern: string, root: string): string {
+  const normalized = pattern.replaceAll("\\", "/").replace(/^\.\//, "");
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) return normalized;
+  return `${root}/${normalized}`;
+}
+
+function findIncludedSourceRoots(includes: string[], foundryApp: string): string[] {
+  const roots = new Set<string>();
+
+  // Foundry's include patterns determine which top-level source folders can
+  // emit declarations. Missing folders are ignored because Foundry may carry
+  // stale include patterns for older app layouts.
+  for (const include of includes) {
+    const root = include.replaceAll("\\", "/").replace(/^\.\//, "").split("/")[0];
+    if (root && !root.includes("*") && existsSync(join(foundryApp, root))) roots.add(root);
+  }
+
+  return [...roots].sort((left, right) => left.localeCompare(right));
+}
+
+function findIncludedGlobalDeclarations(includes: string[], foundryApp: string): string[] {
+  const globals = new Set<string>();
+
+  // Global declarations are copied from the source app instead of the emitted
+  // output so package consumers receive Foundry's ambient declarations exactly.
+  for (const include of includes) {
+    const normalized = include.replaceAll("\\", "/").replace(/^\.\//, "");
+    if (normalized.includes("*") || !normalized.endsWith("global.d.mts")) continue;
+
+    const path = join(foundryApp, normalized);
+    if (existsSync(path)) globals.add(path);
+  }
+
+  return [...globals].sort((left, right) => left.localeCompare(right));
+}
+
+function findAliasTargets(paths: Record<string, string[]>): Map<string, string> {
+  const aliases = new Map<string, string>();
+
+  // Foundry uses aliases like @common/* -> ./common/*. Keep the alias name and
+  // its target root so post-processing stays aligned with Foundry's tsconfig.
+  for (const [aliasPattern, targetPatterns] of Object.entries(paths)) {
+    const alias = aliasPattern.match(/^@([^/*]+)\/\*$/)?.[1];
+    const target = targetPatterns[0]?.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/\*$/, "");
+
+    if (alias && target) aliases.set(alias, target);
+  }
+
+  return aliases;
+}
+
+function buildIndex(sourceRoots: string[], globalDeclarationPaths: string[], foundryApp: string, distDir: string): string {
+  const references = globalDeclarationPaths
+    .map((path) => relative(distDir, join(distDir, relative(foundryApp, path))).replaceAll("\\", "/"))
+    .map((path) => `/// <reference path="./${path}" />`);
+  const exports = sourceRoots
+    .filter((root) => existsSync(join(distDir, root, "_module.d.mts")))
+    .map((root) => `export * as ${getRootExportName(root)} from "./${root}/_module.mjs";`);
+
+  return `${[...references, "", ...exports].join("\n")}\n`;
+}
+
+function getRootExportName(root: string): string {
+  if (root === "client") return "foundry";
+
+  const suffix = root
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join("");
+
+  return `foundry${suffix}`;
 }
 
 function readGeneratorConfig(path: string): GeneratorConfig {
