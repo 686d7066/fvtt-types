@@ -1,0 +1,5 @@
+node_modules/
+.foundry-types-work/
+foundry-types.development.config
+*.tgz
+npm-debug.log*

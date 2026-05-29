@@ -1,0 +1,71 @@
+name: Validate Version
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        shell: pwsh
+        run: |
+          git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}" --depth=1
+          if ($LASTEXITCODE -ne 0) {
+            "Base branch '${{ github.base_ref }}' could not be fetched. Treating this as an initial PR."
+            exit 0
+          }
+
+      - name: Validate package version increased
+        shell: pwsh
+        run: |
+          $currentPackage = Get-Content -Path "package.json" -Raw | ConvertFrom-Json
+          $current = [string] $currentPackage.version
+
+          if ($current -notmatch '^\d+\.\d+\.\d+$') {
+            throw "package.json version '$current' must use x.y.z with numeric parts."
+          }
+
+          $baseRef = "origin/${{ github.base_ref }}"
+          git rev-parse --verify $baseRef *> $null
+          if ($LASTEXITCODE -ne 0) {
+            "No base ref found. Current package.json version '$current' is valid."
+            exit 0
+          }
+
+          $basePackageJson = git show "${baseRef}:package.json" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            "No package.json found on base branch. Current package.json version '$current' is valid."
+            exit 0
+          }
+
+          $basePackage = $basePackageJson | ConvertFrom-Json
+          $base = [string] $basePackage.version
+
+          if ($base -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Base branch package.json version '$base' does not use x.y.z with numeric parts."
+          }
+
+          $currentParts = $current.Split(".") | ForEach-Object { [int] $_ }
+          $baseParts = $base.Split(".") | ForEach-Object { [int] $_ }
+
+          $isGreater =
+            ($currentParts[0] -gt $baseParts[0]) -or
+            (($currentParts[0] -eq $baseParts[0]) -and ($currentParts[1] -gt $baseParts[1])) -or
+            (($currentParts[0] -eq $baseParts[0]) -and ($currentParts[1] -eq $baseParts[1]) -and ($currentParts[2] -gt $baseParts[2]))
+
+          if (-not $isGreater) {
+            throw "package.json version must increase for every PR. Base: $base, current: $current."
+          }
+
+          "Version increased from $base to $current."

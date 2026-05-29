@@ -1,0 +1,46 @@
+{
+  "name": "foundry-vtt-types",
+  "version": "14.363.0",
+  "description": "Unofficial TypeScript declarations generated from a local Foundry Virtual Tabletop installation. Not affiliated with Foundry Gaming LLC.",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "type": "module",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "scripts": {
+    "build": "npm run generate",
+    "generate": "node --experimental-transform-types scripts/generate-types.ts",
+    "test:consumer": "tsc --noEmit -p test/tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "foundry-vtt",
+    "foundryvtt",
+    "typescript",
+    "types"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "typescript": "5.6.3"
+  },
+  "peerDependenciesMeta": {
+    "@pixi/graphics-smooth": {
+      "optional": true
+    },
+    "@pixi/particle-emitter": {
+      "optional": true
+    },
+    "handlebars": {
+      "optional": true
+    },
+    "pixi.js": {
+      "optional": true
+    },
+    "socket.io-client": {
+      "optional": true
+    }
+  }
+}
