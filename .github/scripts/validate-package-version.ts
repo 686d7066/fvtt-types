@@ -31,6 +31,17 @@ function isVersionGreater(current: string, base: string): boolean {
   );
 }
 
+function hasDistChanges(baseRef: string): boolean {
+  const diff = runGit(["diff", "--name-only", `${baseRef}...HEAD`, "--", "dist"], {allowFailure: true});
+
+  if (diff.status !== 0) {
+    console.log("Could not determine whether dist changed. Requiring a version increase.");
+    return true;
+  }
+
+  return diff.stdout.trim().length > 0;
+}
+
 function runGit(args: string[], options: {allowFailure?: boolean} = {}): {stdout: string; status: number | null} {
   const result = spawnSync("git", args, {
     encoding: "utf8",
@@ -73,6 +84,11 @@ try {
 
   if (baseRefCheck.status !== 0) {
     console.log(`No base ref found. Current package.json version '${current}' is valid.`);
+    process.exit(0);
+  }
+
+  if (!hasDistChanges(baseRef)) {
+    console.log("No dist changes found. Skipping package version increase check.");
     process.exit(0);
   }
 
