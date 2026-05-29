@@ -31,11 +31,18 @@ function runGit(args: string[], options: {allowFailure?: boolean} = {}): string 
   return result.stdout;
 }
 
+function hasTag(version: string): boolean {
+  const result = spawnSync("git", ["show-ref", "--verify", "--quiet", `refs/tags/${version}`], {
+    stdio: "ignore"
+  });
+
+  return result.status === 0;
+}
+
 try {
   const version = readPackageVersion();
-  const existingTag = runGit(["rev-parse", `refs/tags/${version}`], {allowFailure: true});
 
-  if (existingTag.trim()) {
+  if (hasTag(version)) {
     console.log(`Tag ${version} already exists.`);
     process.exit(0);
   }
@@ -44,6 +51,7 @@ try {
   runGit(["config", "user.email", "github-actions[bot]@users.noreply.github.com"]);
   runGit(["tag", version]);
   runGit(["push", "origin", version]);
+  console.log(`Created tag ${version}.`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
